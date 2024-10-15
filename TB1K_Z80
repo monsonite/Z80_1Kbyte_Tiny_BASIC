@@ -1,0 +1,887 @@
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;   1 Kbyte Challenge 2016
+;
+;   1KB Tiny BASIC by Paul Scott Robson
+;   Converted to Z80, October 2024 by Ken Boak
+;
+;	variables A-Z, operators + - * / . (and) , (xor), 1 byte values all.
+;
+; 	keywords in lower case, variables in upper case.
+;	: seperates program lines.
+;
+;	NOTE: Some commands have been renamed because only the first character matters
+; 		  so RUN is now XECUTE and LIST is now VIEW
+;
+;	call <line> 						Call as subroutine
+;	fetch <variable>					Input a number
+;	goto <expression>					Go to line number.
+;	if <expr>[>|<|=]<expr> [command]:.. Conditional execution of command(s)
+;	key <variable>						Input a single keystroke (ASCII value)
+; 	let <variable> = <expression> 		Assignment.
+;	new 								Erase current program.
+;	out <expression> 					Print character <expression> (e.g. out 42 prints '*')
+;	print "<string>",<expression>[;] 	Print to terminal
+;	return 								Return from subroutine
+;	stop 								Stop Program
+;	view [<start line>] 				List 12 lines of current program.
+;	xecute  							Run Program (BS breaks into a running program)
+;
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+NextCommand = 0
+GetNextCharacter = 8
+PrintCharacter = 16
+InputLine = 24
+
+VariablePage = 	1000h 											; this page has variables offset from A = 0
+InputPage = 	1100h 											  ; text input goes here.
+UpdatePage = 	1200h 											  ; code to do ld (hl),x goes here+misc
+SPPage = 		1300h 											    ; stack pointer where H==L e.g. $1313
+StackPage = 	1400h 											  ; 2 pages stack. First = Lo, Second = Hi
+
+ProgramMemory = 2000h 											; 127 program lines go here. 64 bytes each.
+																            ; line 1 at 2040h, 2 at 2080h etc.
+		org 	0
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;									Main command loop
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+NextCommand:
+		ld	 	b,']' 											; print a ] prompt
+		rst 	16 									
+		rst 	24									        ; get the line.
+		call 	CommandExecute 							; execute it
+		rst 	0									          ; loop back.
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;							Read next non space character from (HL)
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+		org 	8
+GetNextCharacter:
+		ld 	a,(hl) 											          ; read character.
+		inc 	l 												          ; and advance.
+		cp 	' '												            ; if space
+		jp z, 		GetNextCharacter 								; get another one.
+		ret
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;							Print Character in B, returned in A+B
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+        org     16
+PrintCharacter:
+		in 	a, (c)												        ; check the ready to send flag
+		or 	a
+		jp  p, 		PrintCharacter 									; jump back if not ready
+		ld 	a,b 											            ; send B to port 8.
+		out (c),a
+		ret
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;	
+;								Input a line to InputPage, ASCIIZ.
+;
+;	On exit HL points to line buffer.
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+        org     24
+InputLine:
+		ld 	h,InputPage/256 								; HL points to input buffer
+fCLStartLine:		
+		ld 	l,1  											      ; point to start of line+1
+fCLPreviousCharacter:		
+		dec 	l 											      ; go back 1
+        jp  m, 		fCLStartLine 					; gone too far, restart.
+fCLNextCharacterInput:
+		in a, (c) 												  ; read keyboard
+		or 	a
+		jr z, 		fCLNextCharacterInput
+		ld 	b,a 											      ; echo it
+		rst 16
+		ld 	a,b 											      ; get character back.
+		cp 	8 												      ; is it BS
+		jr z, 		fCLPreviousCharacter
+		ld 	(hl),a 											    ; write it out
+		inc 	l 												    ; next slot
+		xor 	13   											    ; if CR then this will set A = 0
+		jr nz, 	fCLNextCharacterInput
+		dec 	l 												    ; replace last character with 00
+		ld 	(hl),a 
+		ld 	l,a 											      ; point HL to start of line.
+		ret
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;							Evaluate string at HL. Returns result in B. 
+;
+;	Operators are + - * / and , (xor) . (and). Terms are variables a-zA-Z and integer constants
+;
+;	Not awfully syntax checked :) x/0 returns 0. Technically : and up are all variables.
+;
+;	On exit HL points to found unknown character.
+; 	On exit DE points to the line number if it's a program line (that way round)
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+		org 	038h
+Evaluate:
+		xor 	a
+		ld 	b,a 											; b is current left value
+		ld 	d,a 											; d is current right value
+		ld 	c,1 											; c is current operator (+ = 1)
+AddDigit:
+		ld 	e,a 											; save new value in E
+		ld 	a,d 											; multiply D by 10
+		add a, 	a
+		add a, 	a
+		add a, 	d 										; A is now D x 5
+		add a, 	a 										; A is now D x 10
+		add a, 	e 										; add a, the new digit.
+		ld 	d,a 											; put back in D.
+NextCharacter:
+		rst 	8								; get next character.
+		sub 	58 											; 58 - 127 are maybe variables.
+		jp p,  	fIsVariable
+		add a, 	10 										; 0-9 for digits.
+		jp p,		AddDigit 							; if that, add a, to current right and goback.
+		add a, 	6 										; 0-5 for * + , - . /
+fEnterCalc:		
+		ld 	e,a 											; save next operator in E.
+		call 	SubEvaluator 						; do operation 0-5.
+		ld 	b,a 											; save the result in B
+		ld 	d,0  											; clear the right hand side.
+		ld 	c,e 											; put next operator in C 
+		ld 	a,c 											; look at that operator
+		or 	a 												; if +ve loop back next calculation
+		jp p,		NextCharacter 
+;		ld 	d,b 											; put result in D
+;ExitEvaluate1:		
+;		ld 	b,d 											; put result in B
+		dec  	l 												; gone too far, go back one.
+		ld 	a,b 											; get result to set up program pointer.
+fLineNumberToDE:		
+		or 	080h 											; set bit 7 , which will be bit 5 if shift x 2
+		rrca 												  ; also CC for this.
+		ld 	d,a 											; put shifted right once into D
+		ld 	a,0 											; 
+		rrca 													; will clear C again.
+		ld 	e,a  									
+		ld 	a,d 											; now shift DE right once more.
+		rrca
+		ld 	d,a
+		ld 	a,e 											; note :fLineNumberToDE is only used by the program
+		rrca 													; loader code.
+		ld		e,a
+		ret
+
+fReEnterCalc:		
+		ld 	a,0FFh
+		jp 	fEnterCalc 	
+;
+;		Variable ? A contains variable char - 58.
+;		
+fIsVariable:
+		sub 	91-58 											; if >= 91 this will be +ve
+		jp p, 		fReEnterCalc 								
+		add a, 	26 												; if 0-25 then legit.
+		jp m,		fReEnterCalc
+		ld 	e,l 											    ; save L in E
+		ld 	l,a 											    ; L is variable index
+		ld 	a,h 											    ; save H in A
+		ld 	h,VariablePage/256 						; HL points to variable
+		ld 	d,(hl) 											  ; read value into D
+		ld 	h,a 											    ; restore HL from AE
+		ld 	l,e
+		jp 	NextCharacter 							  ; and get the next character
+;
+;	We want to do B <op:D> C D = 0:* 1:+ 2:, 3:- 4:. 5:/ into A - don't change E 
+;
+SubEvaluator:
+		dec 	c 												  ; check for multiply (0:*)
+		jp m, 		fSEMultiply 
+		ld 	a,b 											    ; work out add a, (1:+)
+		add a, 	d
+		dec 	c
+		ret m 
+		ld 	a,b 											    ; work out logical xor (2:,)
+		xor  	d
+		dec 	c
+		ret m 
+		ld 	a,b 											    ; work out subtract (3:-)
+		sub 	d
+		dec 	c
+		ret m
+		ld 	a,b 											    ; work out and (4:.)
+		and 	d
+		dec 	c
+		ret m
+																      ; so it must be divide (5:/)
+		call 	fSEDivide 									; the result is in C so saves a jump.
+		ld 	a,c
+		ret
+;
+;	subtractive division.
+;
+fSEDivide:	
+		ld 	a,d 											    ; check divide by zero.
+		or 	a 
+		ret z  													  ; will return $FF
+		ld 	a,b 											    ; subtract D from this N times. C = 0
+fSEDivide1:
+		sub 	d
+		ret c
+		inc 	c
+		ret z
+		jp 	fSEDivide1
+;
+;	additive multiply
+;
+fSEMultiply:	
+		xor 	a 												  ; total. (*0 becomes *256)
+fSEMultiply1:		
+		add a, 	b 												; add a, B to 0 D times.
+		dec 	d
+		jp nz, 	fSEMultiply1
+		ret
+
+; ***********************************************************************************************
+;
+;								Print line at HL as its line number
+;
+; ***********************************************************************************************
+
+PrintLineNumber:
+		ld 	a,h
+		and 	20h 											    ; if not in program memory
+		ret z 														; don't print it.
+		ld 	a,l
+		add a, 	a
+		ld 	c,a
+		ld 	a,h
+		adc a,h
+		ld 	d,a
+		ld 	a,c
+		add a, 	c
+		ld 	a,d
+		adc a,d
+		and 	07Fh
+		ld 	d,a
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;									Print D as an integer
+;
+;	Breaks A,B,C,D
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+PrintInteger:
+		ld 	c,100 											; initial divisor
+fPILoop:
+		ld 	b,'0'-1 										; character to print/count division
+		ld 	a,d 											; get integer
+fPIDivide:
+		inc 	b 											; one more 
+		ld 	d,a 											; put pre-subtract back.
+		sub 	c											; subtract divisor
+		jp nc,  	fPIDivide 								; keep going till a borrow.
+		rst 	16									        ; print the result.
+		ld 	a,c  											; convert 100-10
+		sub 	90
+		ld 	c,a
+		jp nc, 	fPILoop 									; keep going if 10.
+		ld 	a,d 											; get what is left
+		or 	'0'												; make ASCII and print
+		ld 	b,a 											; it out.
+		rst 	16
+		ret
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;										Execute Command at (HL)
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+CommandExecute:
+		rst 	8							                ; get character.
+		cp 	':'												; skip over :
+		jp z, 		CommandExecute
+		ld 	b,a 											; save in B
+		rla 												; shift left bit 6 into bit 7. basic # test
+		or 	a 												; check if zero, signed.
+		ret z
+		jp p,		ProgramLine 							; if +ve it is a
+
+fSkipOverKeyword:
+		rst 	8								            ; get character
+		add a, 	256-97 									    ; CS if >= 97 e.g. lower case keyword
+		jp c, 		fSkipOverKeyword 
+		dec 	l  											; unpick the last get.
+		ld 	a,b 											; get the first character back.
+
+		cp 	'g' 											; these ones come first, they change HL page.
+		jp z, 		COMMAND_Goto
+		cp 	'i'
+		jp z,		COMMAND_If
+		cp 	'c'
+		jp z, 		COMMAND_Call
+		cp 	'r'
+		jp z, 		COMMAND_Return
+
+		call 	fCExecOne 									; execute one command.
+		rst 	8								            ; next is :
+		cp 	':'
+		jp z, 		CommandExecute
+		ret
+
+fCExecOne:
+		cp 	'o' 											; commands which won't change HL page.
+		jp z, 		COMMAND_Out 
+		cp 	'l'
+		jp z, 		COMMAND_Let
+		cp 	'p'
+		jp z, 		COMMAND_Print 	
+		cp 	'k'
+		jp z, 		COMMAND_Key
+		cp 	'f'
+		jp z, 		COMMAND_Fetch
+		cp 	'x' 											; these ones are not speed important
+		jp z, 		COMMAND_eXecute
+		cp 	'v' 	
+		jp z, 		COMMAND_View
+		cp 	'n'
+		jp z, 		COMMAND_New
+		cp 	's' 
+		jp z, 		COMMAND_Stop
+		ld 	c,'C' 											; command error.
+
+; ***********************************************************************************************
+;
+;								Report error, character code in C
+;
+; ***********************************************************************************************
+
+Error: 	ld 	b,'?' 											; print ?
+		rst 	16
+		ld 	b,c
+		rst 	16 									; print error code
+		ld 	b,'@' 											; print @
+		rst     16
+		call 	PrintLineNumber 								; print line number
+		rst 	0									; go to command loop.
+
+; ***********************************************************************************************
+;
+;									Put a program line into memory.
+;
+; ***********************************************************************************************
+
+ProgramLine:
+		dec 	l 												; backspace to first character
+		rst 	038h 										; get line number into B, add a,ress into DE
+		ld 	c,l 											; C is the low byte of the input line.
+		ld 	a,b 											; exit if the line number is zero
+fPLCopy:
+		or 	a
+		ret z		
+		ld 	l,c 											; read next byte from input line.
+		ld 	h,InputPage/256		
+		ld 	a,(hl)
+		ld 	h,d 											; write it out to add a,ress DE
+		ld 	l,e
+		ld 	(hl),a
+		inc 	c 												; increment two pointers
+		inc 	e 
+		jp 	fPLCopy 										; jump back and return if zero.
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;									view [<start line>] : list program
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+COMMAND_View:
+		rst 	038h										; line number in B, add a,ress in DE.
+		ld 	h,d 											; put line add a,ress in HL.
+		ld 	l,e 							 
+		ld 	e,12 											; E is the number to print.
+fCL_Loop:
+		ld 	a,(hl) 											; look at the code
+		or 	a 												; if zero don't list it
+		jp z, 		fCL_Next
+		call 	16 								; line
+		ld 	b,' ' 											; space
+fCL_Print:
+		rst 	16 									; print
+		ld 	b,(hl) 											; put char in B for printing
+		inc 	l 												; advance pointer
+		ld 	a,b 											; loop back if nz
+		or 	a
+		jp  nz, 	fCL_Print
+		ld 	b,13 											; print new line.
+		rst 	16
+		dec 	e 												; do 12 lines.
+		jp z, 		NextCommand
+fCL_Next:
+		call 	NextLine
+		jp  nz, 	fCL_Loop 										; go back. 
+		rst 	0
+
+; ***********************************************************************************************
+;
+;			Advance pointer HL to next line. Return Z flag set if end of program
+;
+; ***********************************************************************************************
+
+NextLine:
+		ld 	a,l 											; go to next line. 
+		and 	0C0h
+		add a, 	64
+		ld 	l,a
+		ld 	a,h
+		adc a, 	0
+		ld 	h,a
+		cp 	40h 											; reached end of program memory
+		ret
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;							out <expression> prints a character
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+COMMAND_Out:
+		rst 	038h 										; out what ?
+		ld 	a,b 											; check not zero
+		and 	07Fh
+		ret z  													; if so, exit.
+		rst 	16
+		ret
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;									Xecute : Run program
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+COMMAND_eXecute:
+		ld 	h,ProgramMemory / 256 							; start from here
+		ld 	l,0 
+fCR_Loop:
+		in 	 a, (c)											; check for Backspaces which exits.
+		cp 	8
+		jp z, 		COMMAND_Stop
+		call 	CommandExecute 									; execute one line
+		call 	NextLine 										; go to next line
+		jp nz, 	fCR_Loop 											
+COMMAND_Stop:		
+		rst   	0 									            ; end of progra(hl), go to next command.
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;										call <line> subroutine call
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+COMMAND_Call:
+		rst 	038h										; DE = add a,ress, B = line number
+		ld 	a,b 											; if add a,ress = 0
+		or 	a 	
+		jp z, 		fNextCommand 									; crash out to next command.
+
+		ld 	b,h 											; HL -> BC
+		ld 	c,l
+
+		ld 	h,SPPage/256 									; HL points to stack pointer.
+		ld 	l,h
+		ld 	a,(hl) 											; read and bump stack pointer
+		add a, 	1
+		ld 	(hl),a
+
+		ld 	l,a 											; make HL point to low byte stack
+		ld 	h,StackPage/256
+		ld 	(hl),c 											; save return add a,ress
+		inc 	h
+		ld 	(hl),b 
+
+		ld 	l,e 											; and go to the new add a,ress.
+		ld 	h,d
+		jp 	CommandExecute
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;									Subroutine Return
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+COMMAND_Return:
+		ld 	h,SPPage/256 									; HL points to stack pointer.
+		ld 	l,h
+		ld 	d,(hl) 											; read and decrement stack pointer
+		dec 	d
+		ld 	(hl),d
+		inc 	d 												; point to old TOS in HL
+		ld 	l,d
+		ld 	h,StackPage/256
+		ld 	a,(hl) 											; read return add a,ress into HL
+		inc 	h
+		ld 	h,(hl)
+		ld 	l,a
+		jp 	CommandExecute
+
+		
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;										goto <line> Go to a new line
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+COMMAND_Goto:
+		rst 	038h 										; evaluate line to go to
+		ld 	l,e 											; copy add a,ress to DE
+		ld 	h,d
+		ld 	a,b 											; if number found.
+		or 	a
+		jp nz, 	CommandExecute 								; then go there.
+fNextCommand:		
+		rst 	0									        ; goto 0 [stop]
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;									let <variable> = <expression>
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+COMMAND_Let:
+		call 	SetUpSaveVariable 								; code to set up variable update.
+		rst     8 								; check for equal
+		cp 	'='
+		jp  nz, 	SyntaxError
+		rst 	038h 										; evaluate RHS.
+
+; ***********************************************************************************************
+;
+;								Save value in B in preset variable
+;
+; ***********************************************************************************************
+
+SaveBInVar:
+		ld 	d,h 					 						; save HL
+		ld 	e,l
+		call 	UpdatePage 										; load L.
+		ld 	h,VariablePage/256 								; and H.
+		ld 	(hl),b 											; write result out.
+		ld 	h,d 											; restore HL
+		ld 	l,e
+		ret  													; and done.
+
+; ***********************************************************************************************
+;
+;										Report Syntax Error
+;
+; ***********************************************************************************************
+
+SyntaxError: 													; (S)yntax error
+		ld 	c,'S'
+		jp 	Error
+
+; ***********************************************************************************************
+;
+;				Set up to save a value in next variable in line. (puts MVI L,nn;RET)
+;
+; ***********************************************************************************************
+
+SetUpSaveVariable:
+		rst 	8								; get the character
+		sub 	65+26 											; check if > 'Z'.
+		jp p,		fSUSError
+		add a, 	26 												; check if < 'A'
+		jp  m, 		fSUSError
+		ld 	d,h 											; save HL.
+		ld 	e,l
+		ld 	h,UpdatePage/256 								; HL points to update page.
+		ld 	l,0
+		ld 	(hl),036h 											; MVI L command
+		inc 	l
+		ld 	(hl),a 											; add a,ress to load into L
+		inc 	l
+		ld 	(hl),7 											; RET
+		ld 	h,d 											; restore HL
+		ld 	l,e
+		ret
+fSUSError:
+		ld 	c,'V' 											; report (V)ariable error.
+		jp 	Error
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;											fetch <variable>
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+Command_Fetch:
+		call 	SetUpSaveVariable 								; get ready to set up.
+		ld 	d,h 											; save HL in DE
+		ld 	e,l
+		ld 	h,UpdatePage/256 								; save HL in update page
+		ld 	l,10h
+		ld 	(hl),d
+		inc 	l
+		ld 	(hl),e
+		ld 	b,'?'											; prompt
+		rst 	16
+		rst 	24 										; read line.
+		rst 	038h 										; evaluate, result now in B.
+		call 	SaveBInVar 										; save the result
+		ld 	l,10h 											; restore HL
+		ld 	h,UpdatePage/256 				
+		ld 	a,(hl)
+		inc 	l
+		ld 	l,(hl)
+		ld 	h,a
+		ret 													; and exit.
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;										key <variable>
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+COMMAND_Key:
+		call 	SetUpSaveVariable 								; get ready to set up.
+fCK_Get:		
+		in 	a, (c)											; read keyboard
+		or 	a
+		jp z, 		fCK_Get 										; loop if no key
+		ld 	b,a 											; put B in A
+		call 	SaveBInVar 										; save code
+		ret
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;								print <variable> "<string>" ; 
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+Command_Print:
+		rst 	8								            ; get character
+		cp 	    34 											; if " then it is a string.
+		jp z, 		fCP_String 									
+		or 	a 												; if zero then command ends.
+		jp z, 		fCP_EndPrint
+		cp 	':'												; if colon, then command ends.
+		jp z, 		fCP_EndPrint
+		cp 	';' 											; if not semicolon then expression
+		jp  nz, 	fCP_Expression
+;
+;		Found a semicolon so if followed by : or NULL, exit without newline
+;
+		rst 	8 								; semicolon found, get next char and undo incr
+		dec 	l
+		or 	a 												; if end of command exit.
+		ret z 
+		cp 	':' 											; which is either end of line or semicolon.
+		ret z
+		jp 	Command_Print 									; no, go and print again.
+;
+;		Found colon or NULL, so exit with newline
+;
+fCP_EndPrint: 													; end of command
+		dec 	l 												; undo the get.
+fCP_CRAndExit:		
+		ld 	b,13 											; print CR
+		rst 	16
+		ret 													; and exit.
+;
+;		Quoted String
+;
+fCP_String:
+		ld 	a,(hl) 											; read next characted, not skipping spaces.
+		or 	a 
+		jp z, 		fCP_CRAndExit 									; end of line, print CR and exit.
+		inc 	l 												; advance pointer 
+		cp 	34											; if closing quote start again
+		jp z, 		Command_Print 
+		ld 	b,a 											; otherwise print and loop
+		rst 	16
+		jp 	fCP_String
+;
+;		Numerical expression.
+;		
+fCP_Expression:
+		dec 	l 												; start of expression
+		ld 	b,' '											; print a space
+		rst 	16
+		rst 	038h										; get expression
+		ld 	d,b 											; lde value into D
+		call 	PrintInteger 									; print it
+		jp 	COMMAND_Print 									; and loop back.
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;									if <expr><compare><expr>
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+COMMAND_If:
+		rst 	038h										; evaluate left expression into B
+		rst 	8 								            ; get comparison character.
+		ld 	c,-1 											; C will be -1,0,1 depending on character
+		cp 	'<'
+		jp z, 		fCI_FoundCompare
+		inc 	c
+		cp 	'='
+		jp z, 		fCI_FoundCompare
+		inc 	c
+		cp 	'>'
+		jp nz, 	SyntaxError 									; wasn't < = > so SN error.
+
+fCI_FoundCompare:												; B left expr C -1 0 1 for < = >
+		ld 	d,h 											; save HL in DE
+		ld 	e,l
+		ld 	h,UpdatePage/256 								; set HL to point to write area
+		ld 	l,h
+		ld 	(hl),c 											; save comparator
+		inc 	l
+		ld 	(hl),b 											; save LHExpr
+		ld 	h,d 											; copy DE to HL
+		ld 	l,e
+		rst 	038h										; get the right hand side.
+
+		ld 	d,h 											; save HL in DE
+		ld 	e,l 													
+		ld 	h,UpdatePage/256 								; set HL to point to write area
+		ld 	l,h
+		ld 	c,(hl) 											; read comparator into C
+		inc 	l
+		ld 	a,(hl) 											; read left
+		sub 	b 												; subtract right
+		jp z, 		fCI_TestOver 									; if equal, if comparator zero its okay.
+		dec 	c
+		jp  nc, 	fCI_TestOver
+		inc 	c
+		inc 	c
+fCI_TestOver: 													; DE is code, if C is zero test passed.
+		ld 	l,e 											; put DE into HL
+		ld 	h,d
+		ld 	a,c 											; check if test passed.
+		or 	a
+		jp z, 		CommandExecute 									; if so, then execute the command
+fCI_EndLine:
+		ld 	a,(hl) 											; else skip to end of line.
+		or 	a
+		jp z, 		CommandExecute
+		inc 	l
+		jp 	fCI_EndLine
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;										new : erase program completely
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+COMMAND_New:
+		ld 	h,ProgramMemory/256+0C0h 						; add a,ress has 2 MSB sets for zero check.
+		xor 	a 												; zero A and L
+		ld 	l,a
+fCN_Loop: 														; fill memory with zeros.
+		ld 	(hl),a
+		inc 	l
+		jp  nz, 	fCN_Loop
+		inc 	h
+		jp  nz, 	fCN_Loop
+		call 	400h 											; this autoloads a program.
+		rst   	0
+
+
+; ***********************************************************************************************
+; ***********************************************************************************************
+;
+;		This code is not part of the interpreter, it just quick-loads a program in to save
+; 		typing it in :)
+;
+; ***********************************************************************************************
+; ***********************************************************************************************
+
+		org 	400h
+
+		ld 	c,lcode & 255 									; BC = loadd a,ng code.
+		ld 	b,lcode / 256
+fLC_Loop:
+		ld 	l,c 											; look at next character
+		ld 	h,b
+		ld 	a,(hl) 											; exit if zero.
+		or 	a 
+		ret z
+		inc 	c 												; skip over line number
+		call 	fLineNumberToDE								; DE is where it goes.
+fLC_Copy:
+		ld 	l,c 											; read (BC) and bump C
+		ld 	h,b
+		ld 	a,(hl)		
+		inc 	c
+		ld 	l,e 											; write to (DE) and bump E
+		ld 	h,d
+		ld 	(hl),a 
+		inc 	e
+		or 	a 												; copy whole line.
+		jp nz, 	fLC_Copy
+		jp 	fLC_Loop 										; next line.
+
+		org 	500h
+lcode:	
+		db 		10, "call 60:print 0",0
+		db 		12, "call 60:print 1",0
+		db 		14, "call 60:call 60:call 60",0
+;       db 		15, "print \"back\" ",0
+		db 		20, "stop",0
+;		db 		60, "print \"code\" ,2",0
+		db 		70, "return",0
+		db 		0
