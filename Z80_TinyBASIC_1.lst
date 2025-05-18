@@ -1,0 +1,1065 @@
+0000                             ; ******************************************************************************
+0000                             ; ******************************************************************************
+0000                             ; 
+0000                             ;   1 Kbyte Challenge 2016
+0000                             ; 
+0000                             ;   1KB Tiny BASIC by Paul Scott Robson
+0000                             ;   Converted to Z80, October 2024 by Ken Boak
+0000                             ; 
+0000                             ;	variables A-Z, operators + - * / . (and) , (xor), 1 byte values all.
+0000                             ; 
+0000                             ; 	keywords in lower case, variables in upper case.
+0000                             ;	: seperates program lines.
+0000                             ; 
+0000                             ;	NOTE: Some commands have been renamed because only the first character matters
+0000                             ; 		  so RUN is now XECUTE and LIST is now VIEW
+0000                             ; 
+0000                             ;	call <line> 						Call as subroutine
+0000                             ;	fetch <variable>					Input a number
+0000                             ;	goto <expression>					Go to line number.
+0000                             ;	if <expr>[>|<|=]<expr> [command]:.. Conditional execution of command(s)
+0000                             ;	key <variable>						Input a single keystroke (ASCII value)
+0000                             ; 	let <variable> = <expression> 		Assignment.
+0000                             ;	new 								Erase current program.
+0000                             ;	out <expression> 					Print character <expression> (e.g. out 42 prints "*")
+0000                             ;	print "<string>",<expression>[;] 	Print to terminal
+0000                             ;	return 								Return from subroutine
+0000                             ;	stop 								Stop Program
+0000                             ;	view [<start line>] 				List 12 lines of current program.
+0000                             ;	xecute  							Run Program (BS breaks into a running program)
+0000                             ; 
+0000                             ; 
+0000                             ; ******************************************************************************
+0000                             ; ******************************************************************************
+0000                NEXTCOMMAND:   =   0   
+0000                GETNEXTCHARACTER:   =   8   
+0000                PRINTCHARACTER:   =   16   
+0000                INPUTLINE:   =   24   
+0000                             ; 
+0000                VARIABLEPAGE:   =   1000h   ; this page has variables offset from A = 0
+0000                INPUTPAGE:   =   1100h   ; text input goes here.
+0000                UPDATEPAGE:   =   1200h   ; code to do ld (hl),x goes here+misc
+0000                SPPAGE:   =   1300h   ; stack pointer where H==L e.g. $1313
+0000                STACKPAGE:   =   1400h   ; 2 pages stack. First = Lo, Second = Hi
+0000                             ; 
+0000                PROGRAMMEMORY:   =   2000h   ; 127 program lines go here. 64 bytes each.
+0000                             ; line 1 at 2040h, 2 at 2080h etc.
+0000                          .ORG   0   
+0000                             ; 
+0000                             ; ******************************************************************************
+0000                             ; ******************************************************************************
+0000                             ; 
+0000                             ;									Main command loop
+0000                             ; 
+0000                             ; ******************************************************************************
+0000                             ; ******************************************************************************
+0000                             ; 
+0000                NEXTCOMMAND:      
+0000   06 3E                  LD   b,">"   ; print a > prompt
+0002   D7                     RST   16   
+0003   DF                     RST   24   ; get the line.
+0004   CD DF 00               CALL   CommandExecute   ; execute it
+0007   C7                     RST   0   ; loop back.
+0008                             ; 
+0008                             ; ******************************************************************************
+0008                             ; ******************************************************************************
+0008                             ; 
+0008                             ;							Read next non space character from (HL)
+0008                             ; 
+0008                             ; ******************************************************************************
+0008                             ; ******************************************************************************
+0008                             ; 
+0008                          .ORG   8   
+0008                GETNEXTCHARACTER:      
+0008   7E                     LD   a,(hl)   ; read character.
+0009   2C                     INC   l   ; and advance.
+000A   FE 20                  CP   " "   ; if space
+000C   CA 08 00               JP   z,GetNextCharacter   ; get another one.
+000F   C9                     RET      
+0010                             ; 
+0010                             ; ******************************************************************************
+0010                             ; ******************************************************************************
+0010                             ; 
+0010                             ;							Print Character in B, returned in A+B
+0010                             ; 
+0010                             ; ******************************************************************************
+0010                             ; ******************************************************************************
+0010                          .ORG   16   
+0010                PRINTCHARACTER:      
+0010   ED 78                  IN   a,(c)   ; check the ready to send flag
+0012   B7                     OR   a   
+0013   F2 10 00               JP   p,PrintCharacter   ; jump back if not ready
+0016   78                     LD   a,b   ; send B to port 8.
+0017   ED 79                  OUT   (c),a   
+0019   C9                     RET      
+001A                             ; 
+001A                             ; ******************************************************************************
+001A                             ; ******************************************************************************
+001A                             ;	
+001A                             ;								Input a line to InputPage, ASCIIZ.
+001A                             ; 
+001A                             ;	On exit HL points to line buffer.
+001A                             ; 
+001A                             ; ******************************************************************************
+001A                             ; ******************************************************************************
+0018                          .ORG   24   
+0018                INPUTLINE:      
+0018   26 11                  LD   h,InputPage/256   ; HL points to input buffer
+001A                FCLSTARTLINE:      
+001A   2E 01                  LD   l,1   ; point to start of line+1
+001C                FCLPREVIOUSCHARACTER:      
+001C   2D                     DEC   l   ; go back 1
+001D   FA 1A 00               JP   m,fCLStartLine   ; gone too far, restart.
+0020                FCLNEXTCHARACTERINPUT:      
+0020   ED 78                  IN   a,(c)   ; read keyboard
+0022   B7                     OR   a   
+0023   28 FB                  JR   z,fCLNextCharacterInput   
+0025   47                     LD   b,a   ; echo it
+0026   D7                     RST   16   
+0027   78                     LD   a,b   ; get character back.
+0028   FE 08                  CP   8   ; is it BS
+002A   28 F0                  JR   z,fCLPreviousCharacter   
+002C   77                     LD   (hl),a   ; write it out
+002D   2C                     INC   l   ; next slot
+002E   EE 0D                  XOR   13   ; if CR then this will set A = 0
+0030   20 EE                  JR   nz,fCLNextCharacterInput   
+0032   2D                     DEC   l   ; replace last character with 00
+0033   77                     LD   (hl),a   
+0034   6F                     LD   l,a   ; point HL to start of line.
+0035   C9                     RET      
+0036                             ; 
+0036                             ; ******************************************************************************
+0036                             ; ******************************************************************************
+0036                             ; 
+0036                             ;							Evaluate string at HL. Returns result in B. 
+0036                             ; 
+0036                             ;	Operators are + - * / and , (xor) . (and). Terms are variables a-zA-Z and integer constants
+0036                             ; 
+0036                             ;	Not awfully syntax checked :) x/0 returns 0. Technically : and up are all variables.
+0036                             ; 
+0036                             ;	On exit HL points to found unknown character.
+0036                             ; 	On exit DE points to the line number if it's a program line (that way round)
+0036                             ; 
+0036                             ; ******************************************************************************
+0036                             ; ******************************************************************************
+0036                             ; 
+0038                          .ORG   038h   
+0038                EVALUATE:      
+0038   AF                     XOR   a   
+0039   47                     LD   b,a   ; b is current left value
+003A   57                     LD   d,a   ; d is current right value
+003B   0E 01                  LD   c,1   ; c is current operator (+ = 1)
+003D                ADDDIGIT:      
+003D   5F                     LD   e,a   ; save new value in E
+003E   7A                     LD   a,d   ; multiply D by 10
+003F   87                     ADD   a,a   
+0040   87                     ADD   a,a   
+0041   82                     ADD   a,d   ; A is now D x 5
+0042   87                     ADD   a,a   ; A is now D x 10
+0043   83                     ADD   a,e   ; add a, the new digit.
+0044   57                     LD   d,a   ; put back in D.
+0045                NEXTCHARACTER:      
+0045   CF                     RST   8   ; get next character.
+0046   D6 3A                  SUB   58   ; 58 - 127 are maybe variables.
+0048   F2 75 00               JP   p,fIsVariable   
+004B   C6 0A                  ADD   a,10   ; 0-9 for digits.
+004D   F2 3D 00               JP   p,AddDigit   ; if that, add a, to current right and goback.
+0050   C6 06                  ADD   a,6   ; 0-5 for * + , - . /
+0052                FENTERCALC:      
+0052   5F                     LD   e,a   ; save next operator in E.
+0053   CD 8A 00               CALL   SubEvaluator   ; do operation 0-5.
+0056   47                     LD   b,a   ; save the result in B
+0057   16 00                  LD   d,0   ; clear the right hand side.
+0059   4B                     LD   c,e   ; put next operator in C 
+005A   79                     LD   a,c   ; look at that operator
+005B   B7                     OR   a   ; if +ve loop back next calculation
+005C   F2 45 00               JP   p,NextCharacter   
+005F                             ;		ld 	d,b 						; put result in D
+005F                             ;ExitEvaluate1:		
+005F                             ;		ld 	b,d 						; put result in B
+005F   2D                     DEC   l   ; gone too far, go back one.
+0060   78                     LD   a,b   ; get result to set up program pointer.
+0061                FLINENUMBERTODE:      
+0061   F6 80                  OR   080h   ; set bit 7 , which will be bit 5 if shift x 2
+0063   0F                     RRCA      ; also CC for this.
+0064   57                     LD   d,a   ; put shifted right once into D
+0065   3E 00                  LD   a,0   ; 
+0067   0F                     RRCA      ; will clear C again.
+0068   5F                     LD   e,a   
+0069   7A                     LD   a,d   ; now shift DE right once more.
+006A   0F                     RRCA      
+006B   57                     LD   d,a   
+006C   7B                     LD   a,e   ; note :fLineNumberToDE is only used by the program
+006D   0F                     RRCA      ; loader code.
+006E   5F                     LD   e,a   
+006F   C9                     RET      
+0070                             ; 
+0070                FREENTERCALC:      
+0070   3E FF                  LD   a,0FFh   
+0072   C3 52 00               JP   fEnterCalc   
+0075                             ; 
+0075                             ;		Variable ? A contains variable char - 58.
+0075                             ;		
+0075                FISVARIABLE:      
+0075   D6 21                  SUB   91-58   ; if >= 91 this will be +ve
+0077   F2 70 00               JP   p,fReEnterCalc   
+007A   C6 1A                  ADD   a,26   ; if 0-25 then legit.
+007C   FA 70 00               JP   m,fReEnterCalc   
+007F   5D                     LD   e,l   ; save L in E
+0080   6F                     LD   l,a   ; L is variable index
+0081   7C                     LD   a,h   ; save H in A
+0082   26 10                  LD   h,VariablePage/256   ; HL points to variable
+0084   56                     LD   d,(hl)   ; read value into D
+0085   67                     LD   h,a   ; restore HL from AE
+0086   6B                     LD   l,e   
+0087   C3 45 00               JP   NextCharacter   ; and get the next character
+008A                             ; 
+008A                             ;	We want to do B <op:D> C D = 0:* 1:+ 2:, 3:- 4:. 5:/ into A - don't change E 
+008A                             ; 
+008A                SUBEVALUATOR:      
+008A   0D                     DEC   c   ; check for multiply (0:*)
+008B   FA AE 00               JP   m,fSEMultiply   
+008E   78                     LD   a,b   ; work out add a, (1:+)
+008F   82                     ADD   a,d   
+0090   0D                     DEC   c   
+0091   F8                     RET   m   
+0092   78                     LD   a,b   ; work out logical xor (2:,)
+0093   AA                     XOR   d   
+0094   0D                     DEC   c   
+0095   F8                     RET   m   
+0096   78                     LD   a,b   ; work out subtract (3:-)
+0097   92                     SUB   d   
+0098   0D                     DEC   c   
+0099   F8                     RET   m   
+009A   78                     LD   a,b   ; work out and (4:.)
+009B   A2                     AND   d   
+009C   0D                     DEC   c   
+009D   F8                     RET   m   
+009E                             ; so it must be divide (5:/)
+009E   CD A3 00               CALL   fSEDivide   ; the result is in C so saves a jump.
+00A1   79                     LD   a,c   
+00A2   C9                     RET      
+00A3                             ; 
+00A3                             ;	subtractive division.
+00A3                             ; 
+00A3                FSEDIVIDE:      
+00A3   7A                     LD   a,d   ; check divide by zero.
+00A4   B7                     OR   a   
+00A5   C8                     RET   z   ; will return $FF
+00A6   78                     LD   a,b   ; subtract D from this N times. C = 0
+00A7                FSEDIVIDE1:      
+00A7   92                     SUB   d   
+00A8   D8                     RET   c   
+00A9   0C                     INC   c   
+00AA   C8                     RET   z   
+00AB   C3 A7 00               JP   fSEDivide1   
+00AE                             ; 
+00AE                             ;	additive multiply
+00AE                             ; 
+00AE                FSEMULTIPLY:      
+00AE   AF                     XOR   a   ; total. (*0 becomes *256)
+00AF                FSEMULTIPLY1:      
+00AF   80                     ADD   a,b   ; add a, B to 0 D times.
+00B0   15                     DEC   d   
+00B1   C2 AF 00               JP   nz,fSEMultiply1   
+00B4   C9                     RET      
+00B5                             ; 
+00B5                             ; ******************************************************************************
+00B5                             ; 
+00B5                             ;								Print line at HL as its line number
+00B5                             ; 
+00B5                             ; ******************************************************************************
+00B5                             ; 
+00B5                PRINTLINENUMBER:      
+00B5   7C                     LD   a,h   
+00B6   E6 20                  AND   20h   ; if not in program memory
+00B8   C8                     RET   z   ; don't print it.
+00B9   7D                     LD   a,l   
+00BA   87                     ADD   a,a   
+00BB   4F                     LD   c,a   
+00BC   7C                     LD   a,h   
+00BD   8C                     ADC   a,h   
+00BE   57                     LD   d,a   
+00BF   79                     LD   a,c   
+00C0   81                     ADD   a,c   
+00C1   7A                     LD   a,d   
+00C2   8A                     ADC   a,d   
+00C3   E6 7F                  AND   07Fh   
+00C5   57                     LD   d,a   
+00C6                             ; 
+00C6                             ; ******************************************************************************
+00C6                             ; ******************************************************************************
+00C6                             ; 
+00C6                             ;									Print D as an integer
+00C6                             ; 
+00C6                             ;	Breaks A,B,C,D
+00C6                             ; ******************************************************************************
+00C6                             ; ******************************************************************************
+00C6                             ; 
+00C6                PRINTINTEGER:      
+00C6   0E 64                  LD   c,100   ; initial divisor
+00C8                FPILOOP:      
+00C8   06 2F                  LD   b,"0"-1   ; character to print/count division
+00CA   7A                     LD   a,d   ; get integer
+00CB                FPIDIVIDE:      
+00CB   04                     INC   b   ; one more 
+00CC   57                     LD   d,a   ; put pre-subtract back.
+00CD   91                     SUB   c   ; subtract divisor
+00CE   D2 CB 00               JP   nc,fPIDivide   ; keep going till a borrow.
+00D1   D7                     RST   16   ; print the result.
+00D2   79                     LD   a,c   ; convert 100-10
+00D3   D6 5A                  SUB   90   
+00D5   4F                     LD   c,a   
+00D6   D2 C8 00               JP   nc,fPILoop   ; keep going if 10.
+00D9   7A                     LD   a,d   ; get what is left
+00DA   F6 30                  OR   "0"   ; make ASCII and print
+00DC   47                     LD   b,a   ; it out.
+00DD   D7                     RST   16   
+00DE   C9                     RET      
+00DF                             ; 
+00DF                             ; ******************************************************************************
+00DF                             ; ******************************************************************************
+00DF                             ; 
+00DF                             ;										Execute Command at (HL)
+00DF                             ; 
+00DF                             ; ******************************************************************************
+00DF                             ; ******************************************************************************
+00DF                             ; 
+00DF                COMMANDEXECUTE:      
+00DF   CF                     RST   8   ; get character.
+00E0   FE 3A                  CP   ":"   ; skip over :
+00E2   CA DF 00               JP   z,CommandExecute   
+00E5   47                     LD   b,a   ; save in B
+00E6   17                     RLA      ; shift left bit 6 into bit 7. basic # test
+00E7   B7                     OR   a   ; check if zero, signed.
+00E8   C8                     RET   z   
+00E9   F2 4D 01               JP   p,ProgramLine   ; if +ve it is a
+00EC                             ; 
+00EC                FSKIPOVERKEYWORD:      
+00EC   CF                     RST   8   ; get character
+00ED   C6 9F                  ADD   a,256-97   ; CS if >= 97 e.g. lower case keyword
+00EF   DA EC 00               JP   c,fSkipOverKeyword   
+00F2   2D                     DEC   l   ; unpick the last get.
+00F3   78                     LD   a,b   ; get the first character back.
+00F4                             ; 
+00F4   FE 67                  CP   "g"   ; these ones come first, they change HL page.
+00F6   CA D8 01               JP   z,COMMAND_Goto   
+00F9   FE 69                  CP   "i"   
+00FB   CA 85 02               JP   z,COMMAND_If   
+00FE   FE 63                  CP   "c"   
+0100   CA AD 01               JP   z,COMMAND_Call   
+0103   FE 72                  CP   "r"   
+0105   CA C7 01               JP   z,COMMAND_Return   
+0108                             ; 
+0108   CD 12 01               CALL   fCExecOne   ; execute one command.
+010B   CF                     RST   8   ; next is :
+010C   FE 3A                  CP   ":"   
+010E   CA DF 00               JP   z,CommandExecute   
+0111   C9                     RET      
+0112                             ; 
+0112                FCEXECONE:      
+0112   FE 6F                  CP   "o"   ; commands which won't change HL page.
+0114   CA 91 01               JP   z,COMMAND_Out   
+0117   FE 6C                  CP   "l"   
+0119   CA E1 01               JP   z,COMMAND_Let   
+011C   FE 70                  CP   "p"   
+011E   CA 46 02               JP   z,COMMAND_Print   
+0121   FE 6B                  CP   "k"   
+0123   CA 38 02               JP   z,COMMAND_Key   
+0126   FE 66                  CP   "f"   
+0128   CA 1B 02               JP   z,COMMAND_Fetch   
+012B   FE 78                  CP   "x"   ; these ones are not speed important
+012D   CA 98 01               JP   z,COMMAND_eXecute   
+0130   FE 76                  CP   "v"   
+0132   CA 5F 01               JP   z,COMMAND_View   
+0135   FE 6E                  CP   "n"   
+0137   CA C7 02               JP   z,COMMAND_New   
+013A   FE 73                  CP   "s"   
+013C   CA AC 01               JP   z,COMMAND_Stop   
+013F   0E 43                  LD   c,"C"   ; command error.
+0141                             ; 
+0141                             ; ******************************************************************************
+0141                             ; 
+0141                             ;								Report error, character code in C
+0141                             ; 
+0141                             ; ******************************************************************************
+0141                             ; 
+0141   06 3F        ERROR:    LD   b,"?"   ; print ?
+0143   D7                     RST   16   
+0144   41                     LD   b,c   
+0145   D7                     RST   16   ; print error code
+0146   06 40                  LD   b,"@"   ; print @
+0148   D7                     RST   16   
+0149   CD B5 00               CALL   PrintLineNumber   ; print line number
+014C   C7                     RST   0   ; go to command loop.
+014D                             ; 
+014D                             ; ******************************************************************************
+014D                             ; 
+014D                             ;									Put a program line into memory.
+014D                             ; 
+014D                             ; ******************************************************************************
+014D                             ; 
+014D                PROGRAMLINE:      
+014D   2D                     DEC   l   ; backspace to first character
+014E   FF                     RST   038h   ; get line number into B, add a,ress into DE
+014F   4D                     LD   c,l   ; C is the low byte of the input line.
+0150   78                     LD   a,b   ; exit if the line number is zero
+0151                FPLCOPY:      
+0151   B7                     OR   a   
+0152   C8                     RET   z   
+0153   69                     LD   l,c   ; read next byte from input line.
+0154   26 11                  LD   h,InputPage/256   
+0156   7E                     LD   a,(hl)   
+0157   62                     LD   h,d   ; write it out to add a,ress DE
+0158   6B                     LD   l,e   
+0159   77                     LD   (hl),a   
+015A   0C                     INC   c   ; increment two pointers
+015B   1C                     INC   e   
+015C   C3 51 01               JP   fPLCopy   ; jump back and return if zero.
+015F                             ; 
+015F                             ; ******************************************************************************
+015F                             ; ******************************************************************************
+015F                             ; 
+015F                             ;									view [<start line>] : list program
+015F                             ; 
+015F                             ; ******************************************************************************
+015F                             ; ******************************************************************************
+015F                             ; 
+015F                COMMAND_VIEW:      
+015F   FF                     RST   038h   ; line number in B, add a,ress in DE.
+0160   62                     LD   h,d   ; put line add a,ress in HL.
+0161   6B                     LD   l,e   
+0162   1E 0C                  LD   e,12   ; E is the number to print.
+0164                FCL_LOOP:      
+0164   7E                     LD   a,(hl)   ; look at the code
+0165   B7                     OR   a   ; if zero don't list it
+0166   CA 7D 01               JP   z,fCL_Next   
+0169   CD 10 00               CALL   16   ; line
+016C   06 20                  LD   b," "   ; space
+016E                FCL_PRINT:      
+016E   D7                     RST   16   ; print
+016F   46                     LD   b,(hl)   ; put char in B for printing
+0170   2C                     INC   l   ; advance pointer
+0171   78                     LD   a,b   ; loop back if nz
+0172   B7                     OR   a   
+0173   C2 6E 01               JP   nz,fCL_Print   
+0176   06 0D                  LD   b,13   ; print new line.
+0178   D7                     RST   16   
+0179   1D                     DEC   e   ; do 12 lines.
+017A   CA 00 00               JP   z,NextCommand   
+017D                FCL_NEXT:      
+017D   CD 84 01               CALL   NextLine   
+0180   C2 64 01               JP   nz,fCL_Loop   ; go back. 
+0183   C7                     RST   0   
+0184                             ; 
+0184                             ; ******************************************************************************
+0184                             ; 
+0184                             ;			Advance pointer HL to next line. Return Z flag set if end of program
+0184                             ; 
+0184                             ; ******************************************************************************
+0184                             ; 
+0184                NEXTLINE:      
+0184   7D                     LD   a,l   ; go to next line. 
+0185   E6 C0                  AND   0C0h   
+0187   C6 40                  ADD   a,64   
+0189   6F                     LD   l,a   
+018A   7C                     LD   a,h   
+018B   CE 00                  ADC   a,0   
+018D   67                     LD   h,a   
+018E   FE 40                  CP   40h   ; reached end of program memory
+0190   C9                     RET      
+0191                             ; 
+0191                             ; ******************************************************************************
+0191                             ; ******************************************************************************
+0191                             ; 
+0191                             ;							out <expression> prints a character
+0191                             ; 
+0191                             ; ******************************************************************************
+0191                             ; ******************************************************************************
+0191                             ; 
+0191                COMMAND_OUT:      
+0191   FF                     RST   038h   ; out what ?
+0192   78                     LD   a,b   ; check not zero
+0193   E6 7F                  AND   07Fh   
+0195   C8                     RET   z   ; if so, exit.
+0196   D7                     RST   16   
+0197   C9                     RET      
+0198                             ; 
+0198                             ; ******************************************************************************
+0198                             ; ******************************************************************************
+0198                             ; 
+0198                             ;									Xecute : Run program
+0198                             ; 
+0198                             ; ******************************************************************************
+0198                             ; ******************************************************************************
+0198                             ; 
+0198                COMMAND_EXECUTE:      
+0198   26 20                  LD   h,ProgramMemory / 256   ; start from here
+019A   2E 00                  LD   l,0   
+019C                FCR_LOOP:      
+019C   ED 78                  IN   a,(c)   ; check for Backspaces which exits.
+019E   FE 08                  CP   8   
+01A0   CA AC 01               JP   z,COMMAND_Stop   
+01A3   CD DF 00               CALL   CommandExecute   ; execute one line
+01A6   CD 84 01               CALL   NextLine   ; go to next line
+01A9   C2 9C 01               JP   nz,fCR_Loop   
+01AC                COMMAND_STOP:      
+01AC   C7                     RST   0   ; end of progra(hl), go to next command.
+01AD                             ; 
+01AD                             ; ******************************************************************************
+01AD                             ; ******************************************************************************
+01AD                             ; 
+01AD                             ;										call <line> subroutine call
+01AD                             ; 
+01AD                             ; ******************************************************************************
+01AD                             ; ******************************************************************************
+01AD                             ; 
+01AD                COMMAND_CALL:      
+01AD   FF                     RST   038h   ; DE = add a,ress, B = line number
+01AE   78                     LD   a,b   ; if add a,ress = 0
+01AF   B7                     OR   a   
+01B0   CA E0 01               JP   z,fNextCommand   ; crash out to next command.
+01B3                             ; 
+01B3   44                     LD   b,h   ; HL -> BC
+01B4   4D                     LD   c,l   
+01B5                             ; 
+01B5   26 13                  LD   h,SPPage/256   ; HL points to stack pointer.
+01B7   6C                     LD   l,h   
+01B8   7E                     LD   a,(hl)   ; read and bump stack pointer
+01B9   C6 01                  ADD   a,1   
+01BB   77                     LD   (hl),a   
+01BC                             ; 
+01BC   6F                     LD   l,a   ; make HL point to low byte stack
+01BD   26 14                  LD   h,StackPage/256   
+01BF   71                     LD   (hl),c   ; save return add a,ress
+01C0   24                     INC   h   
+01C1   70                     LD   (hl),b   
+01C2                             ; 
+01C2   6B                     LD   l,e   ; and go to the new add a,ress.
+01C3   62                     LD   h,d   
+01C4   C3 DF 00               JP   CommandExecute   
+01C7                             ; 
+01C7                             ; ******************************************************************************
+01C7                             ; ******************************************************************************
+01C7                             ; 
+01C7                             ;									Subroutine Return
+01C7                             ; 
+01C7                             ; ******************************************************************************
+01C7                             ; ******************************************************************************
+01C7                             ; 
+01C7                COMMAND_RETURN:      
+01C7   26 13                  LD   h,SPPage/256   ; HL points to stack pointer.
+01C9   6C                     LD   l,h   
+01CA   56                     LD   d,(hl)   ; read and decrement stack pointer
+01CB   15                     DEC   d   
+01CC   72                     LD   (hl),d   
+01CD   14                     INC   d   ; point to old TOS in HL
+01CE   6A                     LD   l,d   
+01CF   26 14                  LD   h,StackPage/256   
+01D1   7E                     LD   a,(hl)   ; read return add a,ress into HL
+01D2   24                     INC   h   
+01D3   66                     LD   h,(hl)   
+01D4   6F                     LD   l,a   
+01D5   C3 DF 00               JP   CommandExecute   
+01D8                             ; 
+01D8                             ; 
+01D8                             ; ******************************************************************************
+01D8                             ; ******************************************************************************
+01D8                             ; 
+01D8                             ;										goto <line> Go to a new line
+01D8                             ; 
+01D8                             ; ******************************************************************************
+01D8                             ; ******************************************************************************
+01D8                             ; 
+01D8                COMMAND_GOTO:      
+01D8   FF                     RST   038h   ; evaluate line to go to
+01D9   6B                     LD   l,e   ; copy add a,ress to DE
+01DA   62                     LD   h,d   
+01DB   78                     LD   a,b   ; if number found.
+01DC   B7                     OR   a   
+01DD   C2 DF 00               JP   nz,CommandExecute   ; then go there.
+01E0                FNEXTCOMMAND:      
+01E0   C7                     RST   0   ; goto 0 [stop]
+01E1                             ; 
+01E1                             ; ******************************************************************************
+01E1                             ; ******************************************************************************
+01E1                             ; 
+01E1                             ;									let <variable> = <expression>
+01E1                             ; 
+01E1                             ; ******************************************************************************
+01E1                             ; ******************************************************************************
+01E1                             ; 
+01E1                COMMAND_LET:      
+01E1   CD FB 01               CALL   SetUpSaveVariable   ; code to set up variable update.
+01E4   CF                     RST   8   ; check for equal
+01E5   FE 3D                  CP   "="   
+01E7   C2 F6 01               JP   nz,SyntaxError   
+01EA   FF                     RST   038h   ; evaluate RHS.
+01EB                             ; 
+01EB                             ; ******************************************************************************
+01EB                             ; 
+01EB                             ;								Save value in B in preset variable
+01EB                             ; 
+01EB                             ; ******************************************************************************
+01EB                             ; 
+01EB                SAVEBINVAR:      
+01EB   54                     LD   d,h   ; save HL
+01EC   5D                     LD   e,l   
+01ED   CD 00 12               CALL   UpdatePage   ; load L.
+01F0   26 10                  LD   h,VariablePage/256   ; and H.
+01F2   70                     LD   (hl),b   ; write result out.
+01F3   62                     LD   h,d   ; restore HL
+01F4   6B                     LD   l,e   
+01F5   C9                     RET      ; and done.
+01F6                             ; 
+01F6                             ; ******************************************************************************
+01F6                             ; 
+01F6                             ;										Report Syntax Error
+01F6                             ; 
+01F6                             ; ******************************************************************************
+01F6                             ; 
+01F6                SYNTAXERROR:      ; (S)yntax error
+01F6   0E 53                  LD   c,"S"   
+01F8   C3 41 01               JP   Error   
+01FB                             ; 
+01FB                             ; ******************************************************************************
+01FB                             ; 
+01FB                             ;				Set up to save a value in next variable in line. (puts MVI L,nn;RET)
+01FB                             ; 
+01FB                             ; ******************************************************************************
+01FB                             ; 
+01FB                SETUPSAVEVARIABLE:      
+01FB   CF                     RST   8   ; get the character
+01FC   D6 5B                  SUB   65+26   ; check if > "Z".
+01FE   F2 16 02               JP   p,fSUSError   
+0201   C6 1A                  ADD   a,26   ; check if < "A"
+0203   FA 16 02               JP   m,fSUSError   
+0206   54                     LD   d,h   ; save HL.
+0207   5D                     LD   e,l   
+0208   26 12                  LD   h,UpdatePage/256   ; HL points to update page.
+020A   2E 00                  LD   l,0   
+020C   36 36                  LD   (hl),036h   ; MVI L command
+020E   2C                     INC   l   
+020F   77                     LD   (hl),a   ; add a,ress to load into L
+0210   2C                     INC   l   
+0211   36 07                  LD   (hl),7   ; RET
+0213   62                     LD   h,d   ; restore HL
+0214   6B                     LD   l,e   
+0215   C9                     RET      
+0216                FSUSERROR:      
+0216   0E 56                  LD   c,"V"   ; report (V)ariable error.
+0218   C3 41 01               JP   Error   
+021B                             ; 
+021B                             ; ******************************************************************************
+021B                             ; ******************************************************************************
+021B                             ; 
+021B                             ;											fetch <variable>
+021B                             ; 
+021B                             ; ******************************************************************************
+021B                             ; ******************************************************************************
+021B                             ; 
+021B                COMMAND_FETCH:      
+021B   CD FB 01               CALL   SetUpSaveVariable   ; get ready to set up.
+021E   54                     LD   d,h   ; save HL in DE
+021F   5D                     LD   e,l   
+0220   26 12                  LD   h,UpdatePage/256   ; save HL in update page
+0222   2E 10                  LD   l,10h   
+0224   72                     LD   (hl),d   
+0225   2C                     INC   l   
+0226   73                     LD   (hl),e   
+0227   06 3F                  LD   b,"?"   ; prompt
+0229   D7                     RST   16   
+022A   DF                     RST   24   ; read line.
+022B   FF                     RST   038h   ; evaluate, result now in B.
+022C   CD EB 01               CALL   SaveBInVar   ; save the result
+022F   2E 10                  LD   l,10h   ; restore HL
+0231   26 12                  LD   h,UpdatePage/256   
+0233   7E                     LD   a,(hl)   
+0234   2C                     INC   l   
+0235   6E                     LD   l,(hl)   
+0236   67                     LD   h,a   
+0237   C9                     RET      ; and exit.
+0238                             ; 
+0238                             ; ******************************************************************************
+0238                             ; ******************************************************************************
+0238                             ; 
+0238                             ;										key <variable>
+0238                             ; 
+0238                             ; ******************************************************************************
+0238                             ; ******************************************************************************
+0238                             ; 
+0238                COMMAND_KEY:      
+0238   CD FB 01               CALL   SetUpSaveVariable   ; get ready to set up.
+023B                FCK_GET:      
+023B   ED 78                  IN   a,(c)   ; read keyboard
+023D   B7                     OR   a   
+023E   CA 3B 02               JP   z,fCK_Get   ; loop if no key
+0241   47                     LD   b,a   ; put B in A
+0242   CD EB 01               CALL   SaveBInVar   ; save code
+0245   C9                     RET      
+0246                             ; 
+0246                             ; ******************************************************************************
+0246                             ; ******************************************************************************
+0246                             ; 
+0246                             ;								print <variable> "<string>" ; 
+0246                             ; 
+0246                             ; ******************************************************************************
+0246                             ; ******************************************************************************
+0246                             ; 
+0246                COMMAND_PRINT:      
+0246   CF                     RST   8   ; get character
+0247   FE 22                  CP   34   ; if " then it is a string.
+0249   CA 69 02               JP   z,fCP_String   
+024C   B7                     OR   a   ; if zero then command ends.
+024D   CA 64 02               JP   z,fCP_EndPrint   
+0250   FE 3A                  CP   ":"   ; if colon, then command ends.
+0252   CA 64 02               JP   z,fCP_EndPrint   
+0255   FE 3B                  CP   ";"   ; if not semicolon then expression
+0257   C2 79 02               JP   nz,fCP_Expression   
+025A                             ; 
+025A                             ;		Found a semicolon so if followed by : or NULL, exit without newline
+025A                             ; 
+025A   CF                     RST   8   ; semicolon found, get next char and undo incr
+025B   2D                     DEC   l   
+025C   B7                     OR   a   ; if end of command exit.
+025D   C8                     RET   z   
+025E   FE 3A                  CP   ":"   ; which is either end of line or semicolon.
+0260   C8                     RET   z   
+0261   C3 46 02               JP   Command_Print   ; no, go and print again.
+0264                             ; 
+0264                             ;		Found colon or NULL, so exit with newline
+0264                             ; 
+0264                FCP_ENDPRINT:      ; end of command
+0264   2D                     DEC   l   ; undo the get.
+0265                FCP_CRANDEXIT:      
+0265   06 0D                  LD   b,13   ; print CR
+0267   D7                     RST   16   
+0268   C9                     RET      ; and exit.
+0269                             ; 
+0269                             ;		Quoted String
+0269                             ; 
+0269                FCP_STRING:      
+0269   7E                     LD   a,(hl)   ; read next characted, not skipping spaces.
+026A   B7                     OR   a   
+026B   CA 65 02               JP   z,fCP_CRAndExit   ; end of line, print CR and exit.
+026E   2C                     INC   l   ; advance pointer 
+026F   FE 22                  CP   34   ; if closing quote start again
+0271   CA 46 02               JP   z,Command_Print   
+0274   47                     LD   b,a   ; otherwise print and loop
+0275   D7                     RST   16   
+0276   C3 69 02               JP   fCP_String   
+0279                             ; 
+0279                             ;		Numerical expression.
+0279                             ;		
+0279                FCP_EXPRESSION:      
+0279   2D                     DEC   l   ; start of expression
+027A   06 20                  LD   b," "   ; print a space
+027C   D7                     RST   16   
+027D   FF                     RST   038h   ; get expression
+027E   50                     LD   d,b   ; lde value into D
+027F   CD C6 00               CALL   PrintInteger   ; print it
+0282   C3 46 02               JP   COMMAND_Print   ; and loop back.
+0285                             ; 
+0285                             ; ******************************************************************************
+0285                             ; ******************************************************************************
+0285                             ; 
+0285                             ;									if <expr><compare><expr>
+0285                             ; 
+0285                             ; ******************************************************************************
+0285                             ; ******************************************************************************
+0285                             ; 
+0285                COMMAND_IF:      
+0285   FF                     RST   038h   ; evaluate left expression into B
+0286   CF                     RST   8   ; get comparison character.
+0287   0E FF                  LD   c,-1   ; C will be -1,0,1 depending on character
+0289   FE 3C                  CP   "<"   
+028B   CA 9A 02               JP   z,fCI_FoundCompare   
+028E   0C                     INC   c   
+028F   FE 3D                  CP   "="   
+0291   CA 9A 02               JP   z,fCI_FoundCompare   
+0294   0C                     INC   c   
+0295   FE 3E                  CP   ">"   
+0297   C2 F6 01               JP   nz,SyntaxError   ; wasn't < = > so SN error.
+029A                             ; 
+029A                FCI_FOUNDCOMPARE:      ; B left expr C -1 0 1 for < = >
+029A   54                     LD   d,h   ; save HL in DE
+029B   5D                     LD   e,l   
+029C   26 12                  LD   h,UpdatePage/256   ; set HL to point to write area
+029E   6C                     LD   l,h   
+029F   71                     LD   (hl),c   ; save comparator
+02A0   2C                     INC   l   
+02A1   70                     LD   (hl),b   ; save LHExpr
+02A2   62                     LD   h,d   ; copy DE to HL
+02A3   6B                     LD   l,e   
+02A4   FF                     RST   038h   ; get the right hand side.
+02A5                             ; 
+02A5   54                     LD   d,h   ; save HL in DE
+02A6   5D                     LD   e,l   
+02A7   26 12                  LD   h,UpdatePage/256   ; set HL to point to write area
+02A9   6C                     LD   l,h   
+02AA   4E                     LD   c,(hl)   ; read comparator into C
+02AB   2C                     INC   l   
+02AC   7E                     LD   a,(hl)   ; read left
+02AD   90                     SUB   b   ; subtract right
+02AE   CA B7 02               JP   z,fCI_TestOver   ; if equal, if comparator zero its okay.
+02B1   0D                     DEC   c   
+02B2   D2 B7 02               JP   nc,fCI_TestOver   
+02B5   0C                     INC   c   
+02B6   0C                     INC   c   
+02B7                FCI_TESTOVER:      ; DE is code, if C is zero test passed.
+02B7   6B                     LD   l,e   ; put DE into HL
+02B8   62                     LD   h,d   
+02B9   79                     LD   a,c   ; check if test passed.
+02BA   B7                     OR   a   
+02BB   CA DF 00               JP   z,CommandExecute   ; if so, then execute the command
+02BE                FCI_ENDLINE:      
+02BE   7E                     LD   a,(hl)   ; else skip to end of line.
+02BF   B7                     OR   a   
+02C0   CA DF 00               JP   z,CommandExecute   
+02C3   2C                     INC   l   
+02C4   C3 BE 02               JP   fCI_EndLine   
+02C7                             ; 
+02C7                             ; ******************************************************************************
+02C7                             ; ******************************************************************************
+02C7                             ; 
+02C7                             ;										new : erase program completely
+02C7                             ; 
+02C7                             ; ******************************************************************************
+02C7                             ; ******************************************************************************
+02C7                             ; 
+02C7                COMMAND_NEW:      
+02C7   26 E0                  LD   h,ProgramMemory/256+0C0h   ; add a,ress has 2 MSB sets for zero check.
+02C9   AF                     XOR   a   ; zero A and L
+02CA   6F                     LD   l,a   
+02CB                FCN_LOOP:      ; fill memory with zeros.
+02CB   77                     LD   (hl),a   
+02CC   2C                     INC   l   
+02CD   C2 CB 02               JP   nz,fCN_Loop   
+02D0   24                     INC   h   
+02D1   C2 CB 02               JP   nz,fCN_Loop   
+02D4   CD 00 04               CALL   400h   ; this autoloads a program.
+02D7   C7                     RST   0   
+02D8                             ; 
+02D8                             ; 
+02D8                             ; ******************************************************************************
+02D8                             ; ******************************************************************************
+02D8                             ; 
+02D8                             ;		This code is not part of the interpreter, 
+02D8                             ; 		it just quick-loads a program in to save typing it in :)
+02D8                             ; 
+02D8                             ; ******************************************************************************
+02D8                             ; ******************************************************************************
+02D8                             ; 
+0400                          .ORG   400h   
+0400                             ; 
+0400   0E 00                  LD   c,lcode & 255   ; BC = loadd a,ng code.
+0402   06 05                  LD   b,lcode / 256   
+0404                FLC_LOOP:      
+0404   69                     LD   l,c   ; look at next character
+0405   60                     LD   h,b   
+0406   7E                     LD   a,(hl)   ; exit if zero.
+0407   B7                     OR   a   
+0408   C8                     RET   z   
+0409   0C                     INC   c   ; skip over line number
+040A   CD 61 00               CALL   fLineNumberToDE   ; DE is where it goes.
+040D                FLC_COPY:      
+040D   69                     LD   l,c   ; read (BC) and bump C
+040E   60                     LD   h,b   
+040F   7E                     LD   a,(hl)   
+0410   0C                     INC   c   
+0411   6B                     LD   l,e   ; write to (DE) and bump E
+0412   62                     LD   h,d   
+0413   77                     LD   (hl),a   
+0414   1C                     INC   e   
+0415   B7                     OR   a   ; copy whole line.
+0416   C2 0D 04               JP   nz,fLC_Copy   
+0419   C3 04 04               JP   fLC_Loop   ; next line.
+041C                             ; 
+0500                          .ORG   500h   
+0500                LCODE:       
+0500   0A 63 61 6C 6C 20 36 30 3A 70 72 69 6E 74 20 30 00 DB   10,"call 60:print 0",0   
+0511   0C 63 61 6C 6C 20 36 30 3A 70 72 69 6E 74 20 31 00 DB   12,"call 60:print 1",0   
+0522   0E 63 61 6C 6C 20 36 30 3A 63 61 6C 6C 20 36 30 3A 63 61 6C 6C 20 36 30 00 DB   14,"call 60:call 60:call 60",0   
+053B                             ;       db 		15, "print \"back\" ",0
+053B   14 73 74 6F 70 00      DB   20,"stop",0   
+0541                             ;		db 		60, "print \"code\" ,2",0
+0541   46 72 65 74 75 72 6E 00 DB   70,"return",0   
+0549   00                     DB   0   
+
+
+NEXTCOMMAND:        0000 DEFINED AT LINE 57
+                    > USED AT LINE 449
+GETNEXTCHARACTER:   0008 DEFINED AT LINE 73
+                    > USED AT LINE 77
+PRINTCHARACTER:     0010 DEFINED AT LINE 88
+                    > USED AT LINE 91
+INPUTLINE:          0018 DEFINED AT LINE 106
+VARIABLEPAGE:       1000 DEFINED AT LINE 39
+                    > USED AT LINE 211
+                    > USED AT LINE 609
+INPUTPAGE:          1100 DEFINED AT LINE 40
+                    > USED AT LINE 107
+                    > USED AT LINE 411
+UPDATEPAGE:         1200 DEFINED AT LINE 41
+                    > USED AT LINE 608
+                    > USED AT LINE 639
+                    > USED AT LINE 665
+                    > USED AT LINE 676
+                    > USED AT LINE 787
+                    > USED AT LINE 798
+SPPAGE:             1300 DEFINED AT LINE 42
+                    > USED AT LINE 526
+                    > USED AT LINE 551
+STACKPAGE:          1400 DEFINED AT LINE 43
+                    > USED AT LINE 533
+                    > USED AT LINE 558
+PROGRAMMEMORY:      2000 DEFINED AT LINE 45
+                    > USED AT LINE 497
+                    > USED AT LINE 831
+FCLSTARTLINE:       001A DEFINED AT LINE 108
+                    > USED AT LINE 112
+FCLPREVIOUSCHARACTER: 001C DEFINED AT LINE 110
+                    > USED AT LINE 121
+FCLNEXTCHARACTERINPUT: 0020 DEFINED AT LINE 113
+                    > USED AT LINE 116
+                    > USED AT LINE 125
+EVALUATE:           0038 DEFINED AT LINE 147
+ADDDIGIT:           003D DEFINED AT LINE 152
+                    > USED AT LINE 166
+NEXTCHARACTER:      0045 DEFINED AT LINE 161
+                    > USED AT LINE 176
+                    > USED AT LINE 215
+FENTERCALC:         0052 DEFINED AT LINE 168
+                    > USED AT LINE 199
+FLINENUMBERTODE:    0061 DEFINED AT LINE 182
+                    > USED AT LINE 864
+FREENTERCALC:       0070 DEFINED AT LINE 197
+                    > USED AT LINE 205
+                    > USED AT LINE 207
+FISVARIABLE:        0075 DEFINED AT LINE 203
+                    > USED AT LINE 164
+SUBEVALUATOR:       008A DEFINED AT LINE 219
+                    > USED AT LINE 170
+FSEDIVIDE:          00A3 DEFINED AT LINE 245
+                    > USED AT LINE 239
+FSEDIVIDE1:         00A7 DEFINED AT LINE 250
+                    > USED AT LINE 255
+FSEMULTIPLY:        00AE DEFINED AT LINE 259
+                    > USED AT LINE 221
+FSEMULTIPLY1:       00AF DEFINED AT LINE 261
+                    > USED AT LINE 264
+PRINTLINENUMBER:    00B5 DEFINED AT LINE 273
+                    > USED AT LINE 393
+PRINTINTEGER:       00C6 DEFINED AT LINE 299
+                    > USED AT LINE 760
+FPILOOP:            00C8 DEFINED AT LINE 301
+                    > USED AT LINE 313
+FPIDIVIDE:          00CB DEFINED AT LINE 304
+                    > USED AT LINE 308
+COMMANDEXECUTE:     00DF DEFINED AT LINE 328
+                    > USED AT LINE 61
+                    > USED AT LINE 331
+                    > USED AT LINE 357
+                    > USED AT LINE 503
+                    > USED AT LINE 540
+                    > USED AT LINE 563
+                    > USED AT LINE 580
+                    > USED AT LINE 814
+                    > USED AT LINE 818
+FSKIPOVERKEYWORD:   00EC DEFINED AT LINE 338
+                    > USED AT LINE 341
+FCEXECONE:          0112 DEFINED AT LINE 360
+                    > USED AT LINE 354
+ERROR:              0141 DEFINED AT LINE 387
+                    > USED AT LINE 623
+                    > USED AT LINE 651
+PROGRAMLINE:        014D DEFINED AT LINE 402
+                    > USED AT LINE 336
+FPLCOPY:            0151 DEFINED AT LINE 407
+                    > USED AT LINE 418
+COMMAND_VIEW:       015F DEFINED AT LINE 428
+                    > USED AT LINE 374
+FCL_LOOP:           0164 DEFINED AT LINE 433
+                    > USED AT LINE 452
+FCL_PRINT:          016E DEFINED AT LINE 439
+                    > USED AT LINE 445
+FCL_NEXT:           017D DEFINED AT LINE 450
+                    > USED AT LINE 436
+NEXTLINE:           0184 DEFINED AT LINE 461
+                    > USED AT LINE 451
+                    > USED AT LINE 504
+COMMAND_OUT:        0191 DEFINED AT LINE 480
+                    > USED AT LINE 362
+COMMAND_EXECUTE:    0198 DEFINED AT LINE 496
+                    > USED AT LINE 372
+FCR_LOOP:           019C DEFINED AT LINE 499
+                    > USED AT LINE 505
+COMMAND_STOP:       01AC DEFINED AT LINE 506
+                    > USED AT LINE 378
+                    > USED AT LINE 502
+COMMAND_CALL:       01AD DEFINED AT LINE 517
+                    > USED AT LINE 350
+COMMAND_RETURN:     01C7 DEFINED AT LINE 550
+                    > USED AT LINE 352
+COMMAND_GOTO:       01D8 DEFINED AT LINE 574
+                    > USED AT LINE 346
+FNEXTCOMMAND:       01E0 DEFINED AT LINE 581
+                    > USED AT LINE 521
+COMMAND_LET:        01E1 DEFINED AT LINE 592
+                    > USED AT LINE 364
+SAVEBINVAR:         01EB DEFINED AT LINE 605
+                    > USED AT LINE 674
+                    > USED AT LINE 698
+SYNTAXERROR:        01F6 DEFINED AT LINE 621
+                    > USED AT LINE 596
+                    > USED AT LINE 782
+SETUPSAVEVARIABLE:  01FB DEFINED AT LINE 631
+                    > USED AT LINE 593
+                    > USED AT LINE 662
+                    > USED AT LINE 692
+FSUSERROR:          0216 DEFINED AT LINE 649
+                    > USED AT LINE 634
+                    > USED AT LINE 636
+COMMAND_FETCH:      021B DEFINED AT LINE 661
+                    > USED AT LINE 370
+COMMAND_KEY:        0238 DEFINED AT LINE 691
+                    > USED AT LINE 368
+FCK_GET:            023B DEFINED AT LINE 693
+                    > USED AT LINE 696
+COMMAND_PRINT:      0246 DEFINED AT LINE 709
+                    > USED AT LINE 366
+                    > USED AT LINE 728
+                    > USED AT LINE 747
+                    > USED AT LINE 761
+FCP_ENDPRINT:       0264 DEFINED AT LINE 732
+                    > USED AT LINE 714
+                    > USED AT LINE 716
+FCP_CRANDEXIT:      0265 DEFINED AT LINE 734
+                    > USED AT LINE 744
+FCP_STRING:         0269 DEFINED AT LINE 741
+                    > USED AT LINE 712
+                    > USED AT LINE 750
+FCP_EXPRESSION:     0279 DEFINED AT LINE 754
+                    > USED AT LINE 718
+COMMAND_IF:         0285 DEFINED AT LINE 771
+                    > USED AT LINE 348
+FCI_FOUNDCOMPARE:   029A DEFINED AT LINE 784
+                    > USED AT LINE 776
+                    > USED AT LINE 779
+FCI_TESTOVER:       02B7 DEFINED AT LINE 809
+                    > USED AT LINE 804
+                    > USED AT LINE 806
+FCI_ENDLINE:        02BE DEFINED AT LINE 815
+                    > USED AT LINE 820
+COMMAND_NEW:        02C7 DEFINED AT LINE 830
+                    > USED AT LINE 376
+FCN_LOOP:           02CB DEFINED AT LINE 834
+                    > USED AT LINE 837
+                    > USED AT LINE 839
+FLC_LOOP:           0404 DEFINED AT LINE 857
+                    > USED AT LINE 876
+FLC_COPY:           040D DEFINED AT LINE 865
+                    > USED AT LINE 875
+LCODE:              0500 DEFINED AT LINE 879
+                    > USED AT LINE 855
+                    > USED AT LINE 856
