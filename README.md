@@ -3,7 +3,7 @@ A Z80 Tiny BASIC in under 1 Kbytes - inspired by Paul Scott Robson's 8008 Versio
 
 Converted from 8008 mnemonics to Z80.
 
-These mnemonics are not yet optimised to use the Z80 relative jumps or the 16-bit math instructions.
+Z80_TinyBASIC_3 has optimised the mnemonics to use the Z80 relative jumps and the 16-bit math instructions.
 
 There are some really sneaky code routines for performing 16-bit add, sub, and, or, xor, using minimum code.
 
